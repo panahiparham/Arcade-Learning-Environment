@@ -1,6 +1,57 @@
 #include "preprocessed_env.hpp"
 
+#include <cstring>
+#include <sstream>
+#include <stdexcept>
+
 namespace ale::vector {
+
+namespace {
+
+// The Serializer has no float or byte-buffer support, so these encode them
+// through its int and string types.
+void put_float(stella::Serializer& ser, float value) {
+    int bits;
+    std::memcpy(&bits, &value, sizeof(bits));
+    ser.putInt(bits);
+}
+
+float get_float(stella::Deserializer& deser) {
+    const int bits = deser.getInt();
+    float value;
+    std::memcpy(&value, &bits, sizeof(value));
+    return value;
+}
+
+void put_buffer(stella::Serializer& ser, const std::vector<uint8_t>& buffer) {
+    ser.putString(std::string(buffer.begin(), buffer.end()));
+}
+
+void get_buffer(stella::Deserializer& deser, std::vector<uint8_t>& buffer) {
+    const std::string data = deser.getString();
+    if (data.size() != buffer.size()) {
+        throw std::runtime_error(
+            "Saved frame buffer does not match this env's observation settings");
+    }
+    std::memcpy(buffer.data(), data.data(), data.size());
+}
+
+// The standard fixes std::mt19937's text format, so it is portable.
+void put_rng(stella::Serializer& ser, const std::mt19937& rng) {
+    std::ostringstream out;
+    out << rng;
+    ser.putString(out.str());
+}
+
+void get_rng(stella::Deserializer& deser, std::mt19937& rng) {
+    std::istringstream in(deser.getString());
+    in >> rng;
+    if (in.fail()) {
+        throw std::runtime_error("Saved random number generator state is corrupt");
+    }
+}
+
+}  // namespace
 
 /**
  * Maxpool two uint8_t frames using SIMD when available
@@ -317,6 +368,67 @@ void PreprocessedEnv::write_obs_to(uint8_t* dest) const {
 
 bool PreprocessedEnv::is_episode_over() const {
     return game_over_ || elapsed_steps_ >= max_episode_steps_ || (episodic_life_ && was_life_lost_);
+}
+
+void PreprocessedEnv::save_state(stella::Serializer& ser) const {
+    ser.putString(ale_->cloneState(/*include_rng=*/true).serialize());
+    const auto sticky = ale_->environment->getStickyActions();
+    ser.putInt(sticky.player_a_action);
+    ser.putInt(sticky.player_b_action);
+    put_float(ser, sticky.paddle_a_strength);
+    put_float(ser, sticky.paddle_b_strength);
+
+    put_rng(ser, rng_);
+    put_rng(ser, pool_rng_);
+    reset_pool_.save(ser);
+    // Truncation is harmless: frame numbers are reported as int.
+    ser.putInt(static_cast<int>(snapshot_frame_offset_));
+
+    ser.putInt(pending_seed_);
+    ser.putInt(elapsed_steps_);
+    ser.putBool(game_over_);
+    ser.putInt(lives_);
+    ser.putBool(was_life_lost_);
+    ser.putInt(reward_);
+    ser.putInt(current_action_id_);
+    put_float(ser, current_paddle_strength_);
+
+    put_buffer(ser, raw_frames_[0]);
+    put_buffer(ser, raw_frames_[1]);
+    put_buffer(ser, frame_stack_);
+    ser.putInt(frame_stack_idx_);
+}
+
+void PreprocessedEnv::load_state(stella::Deserializer& deser) {
+    ale_->restoreState(ALEState(deser.getString()));
+    StellaEnvironment::StickyActions sticky;
+    sticky.player_a_action = static_cast<ale::Action>(deser.getInt());
+    sticky.player_b_action = static_cast<ale::Action>(deser.getInt());
+    sticky.paddle_a_strength = get_float(deser);
+    sticky.paddle_b_strength = get_float(deser);
+    ale_->environment->setStickyActions(sticky);
+
+    get_rng(deser, rng_);
+    get_rng(deser, pool_rng_);
+    reset_pool_.load(deser);
+    snapshot_frame_offset_ = deser.getInt();
+
+    pending_seed_ = deser.getInt();
+    elapsed_steps_ = deser.getInt();
+    game_over_ = deser.getBool();
+    lives_ = deser.getInt();
+    was_life_lost_ = deser.getBool();
+    reward_ = deser.getInt();
+    current_action_id_ = deser.getInt();
+    current_paddle_strength_ = get_float(deser);
+
+    get_buffer(deser, raw_frames_[0]);
+    get_buffer(deser, raw_frames_[1]);
+    get_buffer(deser, frame_stack_);
+    frame_stack_idx_ = deser.getInt();
+    if (frame_stack_idx_ < 0 || frame_stack_idx_ >= stack_num_) {
+        throw std::runtime_error("Saved frame stack index is out of range");
+    }
 }
 
 void PreprocessedEnv::get_screen_grayscale(uint8_t* buffer) const {
