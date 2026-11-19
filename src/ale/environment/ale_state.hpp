@@ -95,7 +95,7 @@ class ALEState {
   //Get the current mode we are in.
   game_mode_t getCurrentMode() const { return m_mode; }
 
-  std::string serialize();
+  std::string serialize() const;
 
  protected:
   // Let StellaEnvironment access these methods: they are needed for emulation purposes
