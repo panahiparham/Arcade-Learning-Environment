@@ -92,3 +92,84 @@ def test_state_is_independent_of_later_steps():
 
     assert env.save_state() == state
     env.close()
+
+
+class TestRejectedCheckpoints:
+    """Checkpoints are refused whenever they could not resume exactly."""
+
+    def test_save_before_reset(self):
+        """An env that was never reset has no state worth saving."""
+        env = AtariVectorEnv("breakout", **CHECKPOINT_KWARGS)
+        with pytest.raises(RuntimeError, match="preceding reset"):
+            env.save_state()
+        env.close()
+
+    def test_async_mode(self):
+        """With batch_size < num_envs, some envs are always mid-step."""
+        env = AtariVectorEnv("breakout", **CHECKPOINT_KWARGS, batch_size=2)
+        env.reset(seed=0)
+        with pytest.raises(RuntimeError, match="batch_size == num_envs"):
+            env.save_state()
+        with pytest.raises(RuntimeError, match="batch_size == num_envs"):
+            env.load_state(warmed_up_env(warmup_steps=0).save_state())
+        env.close()
+
+    def test_between_send_and_recv(self):
+        """Workers may be using the envs until the pending recv returns."""
+        env = warmed_up_env(warmup_steps=0)
+        state = env.save_state()
+        env.send(np.zeros(NUM_ENVS, dtype=np.int32))
+        with pytest.raises(RuntimeError, match="between send"):
+            env.save_state()
+        with pytest.raises(RuntimeError, match="between send"):
+            env.load_state(state)
+
+        env.recv()
+        env.load_state(state)
+        env.close()
+
+    def test_different_num_envs(self):
+        """A state only fits a vectorizer with as many envs."""
+        state = warmed_up_env(warmup_steps=0).save_state()
+        env = AtariVectorEnv("breakout", **(CHECKPOINT_KWARGS | {"num_envs": 2}))
+        with pytest.raises(RuntimeError, match="num_envs=4"):
+            env.load_state(state)
+        env.close()
+
+    def test_different_observation_settings(self):
+        """Frame buffers saved at one image size do not fit another."""
+        state = warmed_up_env(warmup_steps=0).save_state()
+        env = AtariVectorEnv("breakout", **CHECKPOINT_KWARGS, img_height=42)
+        with pytest.raises(RuntimeError, match="observation settings"):
+            env.load_state(state)
+        env.close()
+
+    def test_different_rom(self):
+        """The emulator refuses a state saved for another game."""
+        state = warmed_up_env(warmup_steps=0).save_state()
+        env = AtariVectorEnv("pong", **CHECKPOINT_KWARGS)
+        with pytest.raises(RuntimeError, match="different ROM"):
+            env.load_state(state)
+        env.close()
+
+    @pytest.mark.parametrize(
+        "corrupt",
+        [
+            pytest.param(lambda state: b"", id="empty"),
+            pytest.param(lambda state: state[: len(state) // 2], id="truncated"),
+        ],
+    )
+    def test_corrupt_state(self, corrupt):
+        """Damaged bytes raise an error instead of loading garbage."""
+        env = warmed_up_env(warmup_steps=0)
+        with pytest.raises(RuntimeError):
+            env.load_state(corrupt(env.save_state()))
+        env.close()
+
+    def test_unknown_format_version(self):
+        """A state from a newer layout is refused before any env is touched."""
+        env = warmed_up_env(warmup_steps=0)
+        state = env.save_state()
+        with pytest.raises(RuntimeError, match="Unsupported"):
+            env.load_state(b"\x02" + state[1:])
+        env.close()
