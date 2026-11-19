@@ -227,3 +227,31 @@ def test_long_rollout_with_resets(device, num_envs=16, rollout_length=320):
     assert num_resets >= num_envs
     envs_1.close()
     envs_2.close()
+
+
+def test_scan_resumes_after_load_state(num_envs=4, num_steps=150):
+    """A loaded state resumes a jitted scan through the existing handle.
+
+    ``load_state`` restores the environments in place, so the handle from
+    ``xla()`` stays valid and the scan replays the steps that followed the save.
+    """
+    envs = AtariVectorEnv("breakout", num_envs=num_envs, max_num_frames_per_episode=400)
+    handle, reset, step = envs.xla()
+    handle, _ = reset(handle, seed=np.arange(num_envs))
+    actions = jax.random.randint(
+        jax.random.key(0), (num_steps, num_envs), 0, envs.single_action_space.n
+    )
+    rollout = jax.jit(lambda h: jax.lax.scan(step, h, xs=actions))
+    handle, _ = jax.block_until_ready(rollout(handle))
+
+    state = envs.save_state()
+    handle, original = jax.block_until_ready(rollout(handle))
+    envs.load_state(state)
+    _, resumed = jax.block_until_ready(rollout(handle))
+
+    _, _, terminations, truncations, _ = original
+    assert int(jnp.sum(terminations | truncations)) >= num_envs
+    assert data_equivalence(
+        jax.tree.map(np.asarray, original), jax.tree.map(np.asarray, resumed)
+    )
+    envs.close()
