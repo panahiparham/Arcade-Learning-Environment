@@ -1,6 +1,7 @@
 #include "env_vectorizer.hpp"
 
 #include <algorithm>
+#include <numeric>
 
 #if defined(__linux__)
     #include <pthread.h>
@@ -44,6 +45,9 @@ int reset_pool_share(int total, int num_envs, int env_id) {
     const int share = total / num_envs + (env_id < total % num_envs ? 1 : 0);
     return std::max(1, share);
 }
+
+// Bump whenever the layout written by save_state() changes.
+constexpr int kStateFormatVersion = 1;
 
 }  // namespace
 
@@ -328,11 +332,14 @@ void EnvVectorizer::send(const std::vector<Action>& actions) {
 
     // Enqueue actions
     action_queue_->enqueue_bulk(mapped_actions);
+    awaiting_recv_ = true;
 }
 
 BatchResult EnvVectorizer::recv() {
     // Wait for batch to complete
     staging_->wait_for_batch();
+
+    awaiting_recv_ = false;
 
     // Check for errors
     check_error();
@@ -344,6 +351,59 @@ BatchResult EnvVectorizer::recv() {
     std::memcpy(last_recv_env_ids_.data(), result.env_ids_data(), batch_size_ * sizeof(int));
 
     return result;
+}
+
+void EnvVectorizer::check_can_checkpoint(const std::string& operation) const {
+    if (batch_size_ != num_envs_) {
+        throw std::runtime_error(
+            operation + " requires batch_size == num_envs (got batch_size=" +
+            std::to_string(batch_size_) + ", num_envs=" + std::to_string(num_envs_) + ")");
+    }
+    if (awaiting_recv_) {
+        throw std::runtime_error(operation + " cannot run between send() and recv()");
+    }
+}
+
+std::string EnvVectorizer::save_state() const {
+    check_can_checkpoint("save_state");
+    if (first_batch_) {
+        throw std::runtime_error("save_state requires a preceding reset()");
+    }
+
+    stella::Serializer ser;
+    ser.putInt(kStateFormatVersion);
+    ser.putInt(num_envs_);
+    for (const auto& env : envs_) {
+        env->save_state(ser);
+    }
+    return ser.get_str();
+}
+
+void EnvVectorizer::load_state(const std::string& state) {
+    check_can_checkpoint("load_state");
+
+    stella::Deserializer deser(state);
+    try {
+        if (deser.getInt() != kStateFormatVersion) {
+            throw std::runtime_error("Unsupported vector environment state format");
+        }
+        const int saved_num_envs = deser.getInt();
+        if (saved_num_envs != num_envs_) {
+            throw std::runtime_error(
+                "State was saved with num_envs=" + std::to_string(saved_num_envs) +
+                ", but this vectorizer has num_envs=" + std::to_string(num_envs_));
+        }
+        for (auto& env : envs_) {
+            env->load_state(deser);
+        }
+    } catch (const char*) {
+        // The Deserializer reports truncated or corrupt data by throwing a C string.
+        throw std::runtime_error("Vector environment state is truncated or corrupt");
+    }
+
+    // Sync mode returns every env in order, so the next send() maps action i to env i.
+    std::iota(last_recv_env_ids_.begin(), last_recv_env_ids_.end(), 0);
+    first_batch_ = false;
 }
 
 void EnvVectorizer::worker_loop(int thread_id) {
