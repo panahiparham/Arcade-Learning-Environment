@@ -8,6 +8,7 @@
 #include <mutex>
 #include <exception>
 #include <filesystem>
+#include <string>
 
 #include "ale/common/Constants.h"
 #include "types.hpp"
@@ -76,6 +77,16 @@ public:
     /// In ordered mode: returns results for all envs in order
     /// In unordered mode: returns results from first batch_size envs to complete
     BatchResult recv();
+
+    /// Serialize every environment so load_state() can resume them exactly.
+    /// Requires sync mode (batch_size == num_envs), a preceding reset(), and
+    /// no send() still awaiting its recv().
+    std::string save_state() const;
+
+    /// Restore a state written by save_state() on a vectorizer with the same
+    /// settings. Requires sync mode and no send() awaiting its recv(); a
+    /// failed load leaves the environments in an unspecified state.
+    void load_state(const std::string& state);
 
     /// Have the workers write the next round's results straight into buffers the
     /// caller already owns, so the caller needs no copy-out. Call it *before*
@@ -153,6 +164,9 @@ private:
     // send() checks this to reject calls that would misroute actions to env 0.
     bool first_batch_{true};
 
+    // True from send() until its recv(), while workers may be using the envs.
+    bool awaiting_recv_{false};
+
     /// Worker thread main loop
     void worker_loop(int thread_id);
 
@@ -161,6 +175,9 @@ private:
 
     /// Set thread CPU affinity
     void set_thread_affinity(int thread_affinity_offset);
+
+    /// Throw unless the workers are idle in sync mode, as checkpoints need.
+    void check_can_checkpoint(const std::string& operation) const;
 
     /// Record an error from a worker thread
     void set_error(std::exception_ptr e);
