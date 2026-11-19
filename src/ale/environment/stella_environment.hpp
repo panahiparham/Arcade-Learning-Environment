@@ -59,6 +59,26 @@ class StellaEnvironment {
     m_player_b_action = PLAYER_B_NOOP;
   }
 
+  /** The last applied actions and paddle strengths, which sticky actions repeat. */
+  struct StickyActions {
+    Action player_a_action;
+    Action player_b_action;
+    float paddle_a_strength;
+    float paddle_b_strength;
+  };
+
+  StickyActions getStickyActions() const {
+    return {m_player_a_action, m_player_b_action, m_paddle_a_strength,
+            m_paddle_b_strength};
+  }
+
+  void setStickyActions(const StickyActions& actions) {
+    m_player_a_action = actions.player_a_action;
+    m_player_b_action = actions.player_b_action;
+    m_paddle_a_strength = actions.paddle_a_strength;
+    m_paddle_b_strength = actions.paddle_b_strength;
+  }
+
   /** Applies the given actions (e.g. updating paddle positions when the paddle is used)
    *  and performs one simulation step in Stella. Returns the resultant reward. When
    *  frame skip is set to > 1, up the corresponding number of simulation steps are performed.
