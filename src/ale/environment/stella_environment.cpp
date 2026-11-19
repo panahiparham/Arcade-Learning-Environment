@@ -35,7 +35,9 @@ StellaEnvironment::StellaEnvironment(OSystem* osystem, RomSettings* settings)
       m_screen(m_osystem->console().mediaSource().height(),
                m_osystem->console().mediaSource().width()),
       m_player_a_action(PLAYER_A_NOOP),
-      m_player_b_action(PLAYER_B_NOOP) {
+      m_player_b_action(PLAYER_B_NOOP),
+      m_paddle_a_strength(1.0),
+      m_paddle_b_strength(1.0) {
   // Determine whether this is a paddle-based game
   if (m_osystem->console().properties().get(Controller_Left) == "PADDLES" ||
       m_osystem->console().properties().get(Controller_Right) == "PADDLES") {

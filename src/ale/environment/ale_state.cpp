@@ -129,7 +129,7 @@ void ALEState::incrementFrame(int steps /* = 1 */) {
 
 void ALEState::resetEpisodeFrameNumber() { m_episode_frame_number = 0; }
 
-std::string ALEState::serialize() {
+std::string ALEState::serialize() const {
   Serializer ser;
 
   ser.putInt(this->m_left_paddle);

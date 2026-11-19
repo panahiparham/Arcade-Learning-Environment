@@ -151,6 +151,30 @@ reset_mask = np.array([True, False, True, False])
 observations, info = envs.reset(seed=np.array([1, 2]), options={"reset_mask": reset_mask})
 ```
 
+## Saving and Loading State
+
+`save_state` returns the state of every sub-environment as `bytes`, and `load_state` restores it, so a training run can be checkpointed and resumed exactly.
+The state includes the emulators and their random number generators, the reset pool, the episode counters, and the frame stacks.
+
+```python
+import pickle
+
+state = envs.save_state()
+with open("envs.pkl", "wb") as f:
+    pickle.dump(state, f)
+
+# Later, possibly in a new process: no reset is needed before loading
+envs = AtariVectorEnv("breakout", num_envs=4)
+with open("envs.pkl", "rb") as f:
+    envs.load_state(pickle.load(f))
+```
+
+Notes:
+- The state can only be loaded into an environment constructed with the same game and arguments.
+- Saving and loading require `batch_size == num_envs` and cannot happen between `send` and `recv`. Saving also requires a preceding `reset`.
+- With the default settings, a state takes about 120 KB per sub-environment (more with `grayscale=False`) plus about 6 KB per reset pool snapshot.
+- With JAX, call `save_state` and `load_state` outside jitted code, after `jax.block_until_ready` on the last outputs of `xla_step` or `xla_reset`. Loading restores the environments in place, so an existing `xla()` handle stays valid. In a new process, load the state and then call `envs.xla()`.
+
 ## JAX / XLA Integration
 
 The vector environment can be called directly from [JAX](https://github.com/jax-ml/jax), including inside `jax.jit` and `jax.lax.scan`, through XLA foreign function calls. This avoids leaving the JAX program to step the environments. The XLA support requires `jax` and `chex`, which can be installed with:

@@ -81,6 +81,12 @@ public:
     /// Check if episode is over
     bool is_episode_over() const;
 
+    /// Write everything needed to resume this env exactly where it is.
+    void save_state(stella::Serializer& ser) const;
+
+    /// Restore a state that save_state wrote for an env with the same settings.
+    void load_state(stella::Deserializer& deser);
+
     /// Get available actions
     const ActionVect& action_set() const { return action_set_; }
 
