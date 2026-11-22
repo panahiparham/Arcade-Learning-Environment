@@ -47,6 +47,7 @@ ale_envs = gym.make_vec(
   - Batch processing capabilities
 - **Asynchronous Operation**: Split step operation into `send` and `recv` for more flexible control flow
 - **JAX / XLA Support**: Call `reset` and `step` from jitted JAX code (see the JAX / XLA section below)
+- **Checkpointing**: Save and load the state of every sub-environment to resume exactly
 - **Gymnasium Compatible**: Implements the Gymnasium `VectorEnv` [interface](https://gymnasium.farama.org/api/vector/)
 
 ## Installation
@@ -192,6 +193,63 @@ Notes:
 - Only `autoreset_mode=AutoresetMode.NEXT_STEP` (the default) is supported.
 - CPU handlers are available on all platforms. GPU (CUDA) handlers are included in the Linux and Windows wheels so the functions can be used within GPU programs; the environments themselves still run on the CPU.
 - The handle refers to the Python `AtariVectorEnv` object, so the object must be kept alive (and not closed) while the XLA functions are used.
+
+## Saving and Loading State
+
+`save_state` returns the state of every sub-environment as `bytes`, and `load_state` restores it, so a training run can be checkpointed and resumed exactly.
+The state includes the emulators and their random number generators, sticky actions, the reset pool, the episode counters, and the frame stacks.
+
+```python
+from ale_py import AtariVectorEnv
+
+envs = AtariVectorEnv("breakout", num_envs=4)
+envs.reset(seed=0)
+# ... step the environments ...
+
+with open("envs.ckpt", "wb") as f:
+    f.write(envs.save_state())
+
+# Later, possibly in a new process. No reset is needed before loading.
+envs = AtariVectorEnv("breakout", num_envs=4)
+with open("envs.ckpt", "rb") as f:
+    envs.load_state(f.read())
+```
+
+Requirements:
+- The state can only be loaded into an environment constructed with the same game and arguments. A different `num_envs`, observation size, or game raises a `RuntimeError`.
+- Saving and loading require `batch_size == num_envs`.
+- Saving and loading cannot happen between `send` and `recv`.
+- Saving requires a preceding `reset`.
+- If loading fails, the sub-environments are left in an unspecified state and must be reset or loaded again before further use.
+
+With the default settings, a state takes about 120 KB per sub-environment (more with `grayscale=False`) plus about 6 KB per reset pool snapshot.
+
+### With JAX / XLA
+
+Call `save_state` and `load_state` from regular Python code, not inside `jax.jit` or `jax.lax.scan`.
+JAX dispatches work asynchronously, so call `jax.block_until_ready` on the last outputs of `xla_step` or `xla_reset` before saving.
+Loading restores the environments in place, so an existing `xla()` handle stays valid.
+
+```python
+handle, xla_reset, xla_step = envs.xla()
+handle, _ = xla_reset(handle, seed=np.arange(4))
+actions = jax.random.randint(
+    jax.random.key(0), (100, 4), 0, envs.single_action_space.n, dtype=jnp.int32
+)
+
+@jax.jit
+def rollout(handle, actions):
+    return jax.lax.scan(xla_step, handle, xs=actions)
+
+handle, _ = jax.block_until_ready(rollout(handle, actions))
+state = envs.save_state()
+
+handle, outputs = rollout(handle, actions)
+envs.load_state(state)  # `handle` is still valid
+handle, same_outputs = rollout(handle, actions)
+```
+
+In a new process, construct the environment with the same arguments, call `load_state`, then call `envs.xla()`.
 
 ## Performance Considerations
 

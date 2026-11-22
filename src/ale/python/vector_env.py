@@ -271,6 +271,29 @@ class AtariVectorEnv(VectorEnv):
         # The data will be of the batch_size, see `info["env_id"]` for the set of environments used.
         return self.ale.recv()
 
+    def save_state(self) -> bytes:
+        """Save the state of every sub-environment for :meth:`load_state`.
+
+        Requires ``batch_size == num_envs``, a preceding :meth:`reset`, and no
+        :meth:`send` awaiting its :meth:`recv`.
+
+        Returns:
+            The serialized state.
+        """
+        return self.ale.save_state()
+
+    def load_state(self, state: bytes):
+        """Restore a state saved by an environment constructed with the same arguments.
+
+        Requires ``batch_size == num_envs`` and no :meth:`send` awaiting its
+        :meth:`recv`. A failed load leaves the sub-environments in an unspecified
+        state, so they must be reset or loaded again before further use.
+
+        Args:
+            state: The serialized state from :meth:`save_state`.
+        """
+        self.ale.load_state(state)
+
     def xla(self):
         """Return XLA-compatible functions for JAX integration."""
         assert self.autoreset_mode == AutoresetMode.NEXT_STEP

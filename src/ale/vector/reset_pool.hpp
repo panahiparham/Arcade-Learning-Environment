@@ -3,8 +3,12 @@
 
 #include <cstddef>
 #include <random>
+#include <stdexcept>
+#include <utility>
 #include <vector>
 
+#include "ale/emucore/Deserializer.hxx"
+#include "ale/emucore/Serializer.hxx"
 #include "ale/environment/ale_state.hpp"
 
 namespace ale::vector {
@@ -64,6 +68,29 @@ class ResetSnapshotPool {
   const Entry& sample(std::mt19937& rng) const {
     std::uniform_int_distribution<std::size_t> dist(0, entries_.size() - 1);
     return entries_[dist(rng)];
+  }
+
+  void save(stella::Serializer& ser) const {
+    ser.putInt(static_cast<int>(entries_.size()));
+    for (const Entry& entry : entries_) {
+      // ALEState::serialize() is not const, so serialize a copy.
+      ALEState state = entry.state;
+      ser.putString(state.serialize());
+      ser.putInt(entry.reset_frames);
+    }
+  }
+
+  /// Replace the entries with ones written by `save`.
+  void load(stella::Deserializer& deser) {
+    const int count = deser.getInt();
+    if (count < 0 || count > max_draws_) {
+      throw std::runtime_error("Reset pool state holds an invalid number of entries");
+    }
+    entries_.clear();
+    for (int i = 0; i < count; ++i) {
+      ALEState state(deser.getString());
+      entries_.push_back(Entry{std::move(state), deser.getInt()});
+    }
   }
 
  private:

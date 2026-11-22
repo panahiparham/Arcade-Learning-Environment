@@ -229,6 +229,21 @@ void init_vector_module(nb::module_& m) {
             return wrap_step_result(self, std::move(result));
         })
 
+        .def("save_state", [](const EnvVectorizer& self) {
+            std::string state;
+            {
+                nb::gil_scoped_release release;
+                state = self.save_state();
+            }
+            return nb::bytes(state.data(), state.size());
+        })
+
+        .def("load_state", [](EnvVectorizer& self, nb::bytes state) {
+            std::string data(state.c_str(), state.size());
+            nb::gil_scoped_release release;
+            self.load_state(data);
+        })
+
         .def("get_action_set", &EnvVectorizer::action_set)
 
         .def("get_num_envs", &EnvVectorizer::num_envs)
