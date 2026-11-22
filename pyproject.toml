@@ -2,7 +2,7 @@
 requires = [
     "scikit-build-core>=0.10",
     "nanobind>=2.5.0",
-    "jax >= 0.4.31"
+    "jax == 0.11.0"
 ]
 build-backend = "scikit_build_core.build"
 
@@ -95,6 +95,7 @@ if.platform-system = "^win32"
 cmake.define.VCPKG_TARGET_TRIPLET = "x64-windows-mixed"
 
 [tool.cibuildwheel]
+build = "cp313-*"
 # Skip 32-bit wheels, musllinux, and free-threaded Python (OpenCV has no wheels
 # for the free-threaded ABI).
 skip = ["*-win32", "*i686", "*-musllinux*", "cp3*t-*"]
